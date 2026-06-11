@@ -4,15 +4,23 @@ import sqlite3
 import re
 import os
 
-# 🔒 GitHub Secrets থেকে টোকেন এবং আইডি অটোমেটিক নিয়ে নেবে
-API_TOKEN = os.getenv('8008121647:AAF5rH0n9waO0UCye2oALM6fj3cEhKZ2yVs')  
-ADMIN_ID = int(os.getenv('7275425971'))
+# 🔒 GitHub Secrets থেকে টোকেন এবং অ্যাডমিন আইডি রিড করার প্রফেশনাল ও সঠিক নিয়ম
+API_TOKEN = os.environ.get('8008121647:AAF5rH0n9waO0UCye2oALM6fj3cEhKZ2yVs')
+ADMIN_ID_RAW = os.environ.get('7275425971')
 
+# সিক্রেট লোড হতে কোনো সমস্যা হলে যেন কোড ক্র্যাশ না করে তার সেফটি চেক
+if not API_TOKEN or not ADMIN_ID_RAW:
+    raise ValueError("❌ Error: BOT_TOKEN or ADMIN_ID is missing in GitHub Secrets!")
+
+ADMIN_ID = int(ADMIN_ID_RAW)
+
+# মাল্টি-থ্রেডিং সেশন অন করা হয়েছে যাতে একাধিক ইউজার বাটন চাপলে গিটহাব সার্ভার স্লো না হয়
 bot = telebot.TeleBot(API_TOKEN, num_threads=4)
 DB_NAME = "bot_database.db"
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_NAME, timeout=10)
+    # SQLite Timeout বাড়ানো হয়েছে যাতে ডেটা রাইট করার সময় ডাটাবেজ লক না হয়ে যায়
+    conn = sqlite3.connect(DB_NAME, timeout=15)
     return conn
 
 def init_db():
@@ -28,8 +36,10 @@ def init_db():
     conn.commit()
     conn.close()
 
+# ডাটাবেজ ইনিশিয়েট করা
 init_db()
 
+# প্রিমিয়াম ইমোজি ও ফ্ল্যাগ ম্যাপিং
 FLAG_MAPPING = {
     "angola": "🇦🇴", "cameroon": "🇨🇲", "ecuador": "🇪🇨", "ethiopia": "🇪🇹",
     "ghana": "🇬🇭", "guinea": "🇬🇳", "haiti": "🇭🇹", "indonesia": "🇮🇩",
@@ -44,6 +54,8 @@ def get_flag(country):
     return FLAG_MAPPING.get(country.lower().strip(), "🌐")
 
 admin_states = {}
+
+# ================= COMMAND HANDLERS =================
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
@@ -99,16 +111,37 @@ def admin_view_user(message):
 def handle_admin_actions(message):
     action = message.text
     admin_states[ADMIN_ID] = {"action": action}
-    bot.send_message(ADMIN_ID, "📝 **নম্বর যোগ করার নিয়ম:**\n\n👉 সরাসরি নম্বরগুলো মেসেজে পেস্ট করে দিন\n👉 অথবা নম্বর থাকা `.txt` ফাইলটি আপলোড করুন।", parse_mode='Markdown')
+    
+    if action in ["➕ Add Numbers", "🔄 Replace Numbers"]:
+        bot.send_message(ADMIN_ID, "📝 **নম্বর যোগ করার নিয়ম:**\n\n👉 সরাসরি নম্বরগুলো এই চ্যাটে মেসেজে পেস্ট করে দিন\n👉 অথবা নম্বর থাকা `.txt` ফাইলটি এখানে আপলোড করুন।", parse_mode='Markdown')
+    elif action == "❌ Delete Country":
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT LOWER(country) FROM numbers")
+        countries = [row[0] for row in cursor.fetchall() if row[0]]
+        conn.close()
+        
+        if not countries:
+            bot.send_message(ADMIN_ID, "❌ ডিলিট করার মতো কোনো দেশ নেই।")
+            return
+            
+        markup = types.InlineKeyboardMarkup()
+        for c in countries:
+            markup.add(types.InlineKeyboardButton(text=f"🗑️ Delete {c.upper()}", callback_data=f"del_{c.lower().strip()}"))
+        bot.send_message(ADMIN_ID, "কোন দেশের সব নম্বর ডিলিট করতে চান সিলেক্ট করুন:", reply_markup=markup)
 
+# 🛑 ফাইল হ্যান্ডলার মেথড (ফাইল দিলে নম্বর অ্যাড হবে)
 @bot.message_handler(content_types=['document'], func=lambda msg: msg.chat.id == ADMIN_ID)
 def handle_admin_file(message):
     if ADMIN_ID not in admin_states or admin_states[ADMIN_ID]['action'] not in ["➕ Add Numbers", "🔄 Replace Numbers"]:
+        bot.reply_to(message, "❌ আগে নিচের কীবোর্ড মেনু থেকে Add বা Replace বাটন চাপুন।")
         return
     try:
         file_info = bot.get_file(message.document.file_id)
         downloaded_file = bot.download_file(file_info.file_path)
         text_content = downloaded_file.decode('utf-8').strip()
+        
+        # রেগুলার এক্সপ্রেশন দিয়ে নিখুঁতভাবে ৭-১৫ ডিজিটের নম্বর ফিল্টার করা
         extracted_numbers = re.findall(r'\b\d{7,15}\b', text_content)
         
         if not extracted_numbers:
@@ -116,11 +149,12 @@ def handle_admin_file(message):
             return
             
         admin_states[ADMIN_ID]['temp_numbers'] = extracted_numbers
-        msg = bot.send_message(ADMIN_ID, f"🎯 **ফাইল চেক সম্পন্ন!**\n\n📊 মোট নম্বর পাওয়া গেছে: `{len(extracted_numbers)}` টি।\n\n✍️ এবার দেশের নাম (Country Name) লিখুন (যেমন: Ghana, Sudan):", parse_mode='Markdown')
+        msg = bot.send_message(ADMIN_ID, f"🎯 **ফাইল চেক সম্পন্ন!**\n\n📊 মোট নম্বর পাওয়া গেছে: `{len(extracted_numbers)}` টি।\n\n✍️ এবার দেশের নাম (Country Name) লিখে পাঠান (যেমন: Ghana, Sudan):", parse_mode='Markdown')
         bot.register_next_step_handler(msg, process_country_name)
     except Exception as e:
         bot.reply_to(message, f"❌ ফাইল রিড করতে সমস্যা হয়েছে: {str(e)}")
 
+# 🛑 টেক্সট হ্যান্ডলার মেথড (সরাসরি মেসেজে টাইপ বা কপি-পেস্ট করে দিলেও নম্বর অ্যাড হবে)
 @bot.message_handler(func=lambda msg: msg.chat.id == ADMIN_ID and msg.text not in ["➕ Add Numbers", "🔄 Replace Numbers", "❌ Delete Country", "👥 View User Menu"])
 def handle_admin_text_numbers(message):
     if ADMIN_ID not in admin_states or admin_states[ADMIN_ID]['action'] not in ["➕ Add Numbers", "🔄 Replace Numbers"]:
@@ -134,14 +168,16 @@ def handle_admin_text_numbers(message):
             return
             
         admin_states[ADMIN_ID]['temp_numbers'] = extracted_numbers
-        msg = bot.send_message(ADMIN_ID, f"🎯 **মেসেজ借েক সম্পন্ন!**\n\n📊 মোট নম্বর পাওয়া গেছে: `{len(extracted_numbers)}` টি।\n\n✍️ এবার দেশের নাম (Country Name) লিখুন (যেমন: Ghana, Sudan):", parse_mode='Markdown')
+        msg = bot.send_message(ADMIN_ID, f"🎯 **মেসেজ চেক সম্পন্ন!**\n\n📊 মোট নম্বর পাওয়া গেছে: `{len(extracted_numbers)}` টি।\n\n✍️ এবার দেশের নাম (Country Name) লিখে পাঠান (যেমন: Ghana, Sudan):", parse_mode='Markdown')
         bot.register_next_step_handler(msg, process_country_name)
     except Exception as e:
         bot.reply_to(message, f"❌ সমস্যা হয়েছে: {str(e)}")
 
 def process_country_name(message):
     country_name = message.text.strip().lower()
+    
     if ADMIN_ID not in admin_states or 'temp_numbers' not in admin_states[ADMIN_ID]:
+        bot.send_message(ADMIN_ID, "❌ সেশন শেষ হয়ে গেছে। দয়া করে আবার শুরু থেকে করুন।")
         return
         
     action = admin_states[ADMIN_ID]['action']
@@ -161,17 +197,27 @@ def process_country_name(message):
     conn.commit()
     conn.close()
     
-    bot.send_message(ADMIN_ID, f"✅ **সফল হয়েছে!**\n\n🌍 দেশ: `{country_name.upper()}`\n📊 মোট `{success_count}` টি নম্বর ডাটাবেজে সেভ হয়েছে।", parse_mode='Markdown')
+    bot.send_message(ADMIN_ID, f"✅ **১০০০% সফল!**\n\n🌍 দেশ: `{country_name.upper()}`\n📊 মোট `{success_count}` টি নম্বর ডাটাবেজে পারফেক্টলি সেভ হয়েছে।", parse_mode='Markdown')
     admin_states.pop(ADMIN_ID, None)
 
-# ================= USER CALLBACKS =================
+# ================= USER CALLBACKS (GET NUMBERS) =================
 
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
     chat_id = call.message.chat.id
     data = call.data
     
-    if data == "menu_main":
+    if data.startswith("del_") and chat_id == ADMIN_ID:
+        country_to_del = data.split("_")[1].lower().strip()
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM numbers WHERE LOWER(country) = ?", (country_to_del,))
+        conn.commit()
+        conn.close()
+        bot.edit_message_text(f"🗑️ {country_to_del.upper()} এর সব নম্বর মুছে ফেলা হয়েছে।", chat_id, call.message.message_id)
+        bot.answer_callback_query(call.id)
+        
+    elif data == "menu_main":
         show_user_countries(chat_id, call.message.message_id, is_edit=True)
         bot.answer_callback_query(call.id)
         
@@ -180,15 +226,17 @@ def handle_callbacks(call):
         conn = get_db_connection()
         cursor = conn.cursor()
         
+        # ইউজার ক্লিক করলে এক সাথে ৩টি নম্বর রিলিজ করার কুয়েরি
         cursor.execute("SELECT id, number FROM numbers WHERE LOWER(country) = ? LIMIT 3", (country,))
         rows = cursor.fetchall()
         
         if not rows:
-            bot.answer_callback_query(call.id, text=f"🏁 {country.upper()} এর সব নম্বর শেষ!", show_alert=True)
+            bot.answer_callback_query(call.id, text=f"🏁 {country.upper()} এর সব নম্বর শেষ হয়ে গেছে!", show_alert=True)
             show_user_countries(chat_id, call.message.message_id, is_edit=True)
             conn.close()
             return
             
+        # রিলিজ হওয়া নম্বরগুলো ডাটাবেজ থেকে সাথে সাথে ডিলিট করে দেওয়া
         for row in rows:
             cursor.execute("DELETE FROM numbers WHERE id = ?", (row[0],))
         conn.commit()
@@ -214,4 +262,5 @@ def handle_callbacks(call):
             
         bot.answer_callback_query(call.id)
 
+# গিটহাব রানার স্ক্রিপ্ট অ্যাক্টিভেশন
 bot.infinity_polling()
