@@ -4,15 +4,9 @@ import sqlite3
 import re
 import os
 
-# 🔒 GitHub Secrets থেকে টোকেন এবং অ্যাডমিন আইডি রিড করার প্রফেশনাল ও সঠিক নিয়ম
-API_TOKEN = os.environ.get('8008121647:AAF5rH0n9waO0UCye2oALM6fj3cEhKZ2yVs')
-ADMIN_ID_RAW = os.environ.get('7275425971')
-
-# সিক্রেট লোড হতে কোনো সমস্যা হলে যেন কোড ক্র্যাশ না করে তার সেফটি চেক
-if not API_TOKEN or not ADMIN_ID_RAW:
-    raise ValueError("❌ Error: BOT_TOKEN or ADMIN_ID is missing in GitHub Secrets!")
-
-ADMIN_ID = int(ADMIN_ID_RAW)
+# ⚠️ গিটহাব সিক্রেটস ছাড়া সরাসরি কানেক্ট করার ১০০০% কার্যকরী নিয়ম:
+API_TOKEN = '8008121647:AAF5rH0n9waO0UCye2oALM6fj3cEhKZ2yVs'  # উদাহরণ: '123456:ABCdef...'
+ADMIN_ID = 7275425971  # এখানে আপনার আসল টেলিগ্রাম আইডি নম্বর দিন (কোনো উদ্ধৃতি চিহ্ন ছাড়া শুধু সংখ্যা)
 
 # মাল্টি-থ্রেডিং সেশন অন করা হয়েছে যাতে একাধিক ইউজার বাটন চাপলে গিটহাব সার্ভার স্লো না হয়
 bot = telebot.TeleBot(API_TOKEN, num_threads=4)
@@ -64,7 +58,7 @@ def send_welcome(message):
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         markup.add("➕ Add Numbers", "🔄 Replace Numbers", "❌ Delete Country")
         markup.add("👥 View User Menu")
-        bot.send_message(chat_id, "👑 **প্রফেশনাল ওটিপি বট কন্ট্রোল প্যানেল (GitHub 24/7 Edition):**", reply_markup=markup, parse_mode='Markdown')
+        bot.send_message(chat_id, "👑 **প্রফেশনাল ওটিপি বট কন্ট্রোল প্যানেল (GitHub Manual Edition):**", reply_markup=markup, parse_mode='Markdown')
     else:
         show_user_countries(chat_id, is_edit=False)
 
@@ -141,7 +135,6 @@ def handle_admin_file(message):
         downloaded_file = bot.download_file(file_info.file_path)
         text_content = downloaded_file.decode('utf-8').strip()
         
-        # রেগুলার এক্সপ্রেশন দিয়ে নিখুঁতভাবে ৭-১৫ ডিজিটের নম্বর ফিল্টার করা
         extracted_numbers = re.findall(r'\b\d{7,15}\b', text_content)
         
         if not extracted_numbers:
@@ -226,7 +219,6 @@ def handle_callbacks(call):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # ইউজার ক্লিক করলে এক সাথে ৩টি নম্বর রিলিজ করার কুয়েরি
         cursor.execute("SELECT id, number FROM numbers WHERE LOWER(country) = ? LIMIT 3", (country,))
         rows = cursor.fetchall()
         
@@ -236,7 +228,6 @@ def handle_callbacks(call):
             conn.close()
             return
             
-        # রিলিজ হওয়া নম্বরগুলো ডাটাবেজ থেকে সাথে সাথে ডিলিট করে দেওয়া
         for row in rows:
             cursor.execute("DELETE FROM numbers WHERE id = ?", (row[0],))
         conn.commit()
@@ -262,5 +253,5 @@ def handle_callbacks(call):
             
         bot.answer_callback_query(call.id)
 
-# গিটহাব রানার স্ক্রিপ্ট অ্যাক্টিভেশন
+# বটের অ্যাক্টিভেশন পোলিং
 bot.infinity_polling()
